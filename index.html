@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="HNO Heidelberg" />
+<title>HNO Zentrum Heidelberg</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { background: #EEF2F7; font-family: 'DM Sans', sans-serif; }
+  input, button, select { font-family: 'DM Sans', sans-serif; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+/*
+ * DATENSCHUTZ / DSGVO:
+ * Alle Patientendaten werden ausschliesslich lokal im Browser verarbeitet.
+ * Es werden KEINE Daten an externe Server, Cloud-Dienste oder Dritte uebertragen.
+ * Die Daten verbleiben vollstaendig auf dem Geraet des Nutzers.
+ */
+
+var PUNKTWERT = 0.0582873;
+
+/* ── Fallback GOAe codes (used until xlsx is loaded) ───────────────────── */
+var DEFAULT_GOAE = [
+  { code:"4",    cat:"Beratung",     desc:"Erhebung Fremdanamnese/Untersuchung von Bezugspersonen", fee:12.82 },
+  { code:"6",    cat:"Untersuchung", desc:"Vollst\u00e4ndige K\u00f6rperliche Untersuchung mind. 1 kl. Organsysteme", fee:5.83 },
+  { code:"34",   cat:"Planung",      desc:"Planung eines operativen Eingriffs und Abw\u00e4gung seiner Konsequenzen und Risiken", fee:17.49 },
+  { code:"50",   cat:"Besuch",       desc:"Besuch der Klinik, einschlie\u00dflich Beratung, ohne festen Termin", fee:18.65 },
+  { code:"51",   cat:"Besuch",       desc:"Besuch eines weiteren Kranken in derselben h\u00e4uslichen Gemeinschaft, einschl. Beratung", fee:14.57 },
+  { code:"60",   cat:"Besuch",       desc:"Konsiliarische Er\u00f6rterung zwei oder mehr \u00c4rzten", fee:6.99 },
+  { code:"75",   cat:"Verwaltung",   desc:"Schriftlicher Befundbericht mit kritischer Stellungnahme", fee:7.58 },
+  { code:"200",  cat:"Prozedur",     desc:"Verbandswechsel", fee:2.62 },
+  { code:"204",  cat:"Prozedur",     desc:"Kompressionsverband", fee:5.54 },
+  { code:"1418", cat:"HNO",          desc:"Endoskopische Untersuchung, Nasenhaupth\u00f6hle/Nasenrachenraum/Stimmenb\u00e4nder", fee:10.49 },
+  { code:"1529", cat:"HNO",          desc:"Wechsel der Trachealkan\u00fcle", fee:8.86 },
+  { code:"1530", cat:"HNO",          desc:"Untersuchung des Kehlkopfs mit dem Laryngoskop", fee:10.61 },
+  { code:"1565", cat:"HNO",          desc:"Entfernung von Ohrenschmalzpfr\u00f6pfchen, auch beidseitig", fee:2.62 },
+  { code:"1569", cat:"HNO",          desc:"Entfernung eines festsitzenden Fremdk\u00f6rpers, Geh\u00f6rgang/Pausenh\u00f6hle (einfach)", fee:9.91 },
+  { code:"1570", cat:"HNO",          desc:"Entfernung eines festsitzenden Fremdk\u00f6rpers, Geh\u00f6rgang/Pausenh\u00f6hle (schwierig)", fee:8.63 },
+  { code:"2006", cat:"Prozedur",     desc:"Wundbehandlung incl. Granulations- oder Nekrosenabtragung", fee:3.67 },
+  { code:"2007", cat:"Prozedur",     desc:"Entfernung von F\u00e4den oder Klammern", fee:2.33 },
+  { code:"WG",   cat:"Besuch",       desc:"Wegegeld 5-10 km", fee:6.64 },
+  { code:"A1530",cat:"HNO",          desc:"Tracheoskopie", fee:10.61 },
+  { code:"SK",   cat:"Sachkosten",   desc:"Sachkosten: Auslagen f\u00fcr Verbrauchsmaterial", fee:4.95 },
+];
+
+function fmtEuro(val) {
+  return parseFloat(val).toFixed(2).replace(".", ",") + " \u20ac";
+}
+
+function fmtDate(d) {
+  if (!d) return "\u2014";
+  // already DD.MM.YYYY?
+  if (/^\d{2}\.\d{2}\.\d{4}$/.test(d)) return d;
+  try { return new Date(d).toLocaleDateString("de-DE", { day:"2-digit", month:"2-digit", year:"numeric" }); }
+  catch(e) { return String(d); }
+}
+
+var C = { bg:"#EEF2F7", surf:"#fff", navy:"#1A3A5C", accent:"#0EA5E9", green:"#10B981", red:"#EF4444", orange:"#F59E0B", txt:"#1E293B", muted:"#64748B", border:"#E2E8F0" };
+
+var S = {
+  app:        { maxWidth:430, margin:"0 auto", minHeight:"100vh", background:C.bg, fontFamily:"'DM Sans',sans-serif", color:C.txt, display:"flex", flexDirection:"column" },
+  hdr:        { background:C.navy, padding:"54px 20px 14px", display:"flex", alignItems:"center", gap:12 },
+  hdrIcon:    { width:36, height:36, background:"rgba(255,255,255,0.12)", borderRadius:10, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 },
+  hdrTitle:   { fontFamily:"'Syne',sans-serif", fontSize:17, fontWeight:700, color:"#fff", letterSpacing:"-0.3px" },
+  hdrSub:     { fontSize:12, color:"rgba(255,255,255,0.55)", marginTop:1 },
+  tab:        { flex:1, padding:"14px 14px 90px", overflowY:"auto" },
+  searchWrap: { position:"relative", marginBottom:10 },
+  searchIcon: { position:"absolute", left:13, top:"50%", transform:"translateY(-50%)", fontSize:18, color:C.muted, pointerEvents:"none" },
+  searchInput:{ width:"100%", padding:"12px 14px 12px 38px", borderRadius:12, border:"1px solid "+C.border, fontSize:15, background:C.surf, outline:"none", color:C.txt },
+  clearBtn:   { position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", fontSize:14, color:C.muted, cursor:"pointer" },
+  facRow:     { display:"flex", gap:8, marginBottom:14 },
+  facBtn:     { flex:1, padding:"7px 0", borderRadius:20, border:"1px solid "+C.border, background:C.surf, fontSize:13, cursor:"pointer", fontWeight:500, color:C.muted },
+  facActive:  { background:C.navy, color:"#fff", border:"1px solid "+C.navy },
+  list:       { display:"flex", flexDirection:"column", gap:8 },
+  card:       { background:C.surf, borderRadius:14, padding:14, marginBottom:8 },
+  cardHead:   { display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer" },
+  pName:      { fontWeight:600, fontSize:15 },
+  pSub:       { fontSize:12, color:C.muted, marginTop:2 },
+  cardBody:   { marginTop:12, paddingTop:12, borderTop:"1px solid "+C.border },
+  badge:      { display:"inline-block", fontSize:12, fontWeight:500, padding:"3px 10px", borderRadius:20, marginBottom:6, marginRight:6 },
+  badge2:     { background:"#E2E8F0", color:C.muted, fontSize:11, fontWeight:600, padding:"1px 7px", borderRadius:20, marginLeft:6 },
+  section:    { fontSize:12, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:8, marginTop:6, display:"flex", alignItems:"center" },
+  primaryBtn: { width:"100%", padding:"13px", borderRadius:12, border:"none", background:C.navy, color:"#fff", fontSize:15, fontWeight:600, cursor:"pointer", marginBottom:14 },
+  aBtn:       { width:"100%", padding:"10px", borderRadius:10, border:"none", fontSize:14, fontWeight:500, cursor:"pointer" },
+  aBtnPrimary:{ background:C.accent, color:"#fff" },
+  aBtnSuccess:{ background:C.green, color:"#fff" },
+  empty:      { textAlign:"center", color:C.muted, fontSize:14, padding:"50px 20px" },
+  nav:        { position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:430, background:C.surf, borderTop:"1px solid "+C.border, display:"flex", paddingBottom:20, zIndex:100 },
+  navBtn:     { flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3, background:"none", border:"none", cursor:"pointer", padding:"10px 0 4px", position:"relative" },
+  navIcon:    { fontSize:20, lineHeight:1 },
+  navLbl:     { fontSize:11 },
+  navDot:     { width:4, height:4, background:C.navy, borderRadius:"50%", position:"absolute", bottom:0 },
+  errBox:     { background:"#FEE2E2", color:C.red, padding:"12px 14px", borderRadius:10, fontSize:14, marginBottom:12 },
+  overlay:    { position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"flex-end", zIndex:200 },
+  sheet:      { background:C.surf, borderRadius:"20px 20px 0 0", padding:"16px 20px 40px", width:"100%", maxWidth:430, margin:"0 auto", maxHeight:"85vh", overflowY:"auto" },
+  sheetHandle:{ width:36, height:4, background:"#CBD5E1", borderRadius:4, margin:"0 auto 16px" },
+  noteText:   { fontSize:13, color:C.muted, marginBottom:8, lineHeight:1.5 },
+  privacy:    { textAlign:"center", marginTop:16, marginBottom:8 },
+  privacyTxt: { fontSize:11, color:C.muted },
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TAB 1: GOAe (reads goae_codes.xlsx OR uses built-in defaults)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function parseGoaeXlsx(arrayBuffer) {
+  var wb = XLSX.read(arrayBuffer, { type:"array" });
+  // Try "GOAe Codes" sheet, fall back to first sheet
+  var wsName = wb.SheetNames.find(function(n){ return n.toLowerCase().includes("go\u00e4") || n.toLowerCase().includes("goae") || n.toLowerCase().includes("code"); }) || wb.SheetNames[0];
+  var ws = wb.Sheets[wsName];
+  var rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:"" });
+  // Header: Code, Kategorie, Beschreibung, Gebuehr, Punkte
+  var data = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0] && !r[2]) continue;
+    data.push({
+      code: String(r[0] || "").trim(),
+      cat: String(r[1] || "").trim(),
+      desc: String(r[2] || "").trim(),
+      fee: parseFloat(r[3]) || 0,
+    });
+  }
+  return data;
+}
+
+function GoaeTab() {
+  var _s1 = useState(DEFAULT_GOAE), codes = _s1[0], setCodes = _s1[1];
+  var _s2 = useState(false), xlsxLoaded = _s2[0], setXlsxLoaded = _s2[1];
+  var _s3 = useState(""), q = _s3[0], setQ = _s3[1];
+  var _s4 = useState("2.3"), fac = _s4[0], setFac = _s4[1];
+  var _s5 = useState(null), err = _s5[0], setErr = _s5[1];
+  var fileRef = useRef(null);
+
+  function handleFile(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    setErr(null);
+    var reader = new FileReader();
+    reader.onload = function(evt) {
+      try {
+        var parsed = parseGoaeXlsx(new Uint8Array(evt.target.result));
+        if (parsed.length > 0) {
+          setCodes(parsed);
+          setXlsxLoaded(true);
+        } else {
+          setErr("Keine GO\u00c4-Codes in der Datei gefunden.");
+        }
+      } catch(ex) {
+        setErr("Datei konnte nicht gelesen werden: " + ex.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  }
+
+  var results = q.trim() === "" ? codes : codes.filter(function(g) {
+    var ql = q.toLowerCase();
+    return g.code.toLowerCase().startsWith(ql) || g.desc.toLowerCase().includes(ql) || g.cat.toLowerCase().includes(ql);
+  });
+
+  var f = parseFloat(fac) || 1.0;
+
+  return (
+    <div style={S.tab}>
+      <input type="file" accept=".xlsx,.xls" ref={fileRef} style={{ display:"none" }} onChange={handleFile} />
+
+      {/* Load xlsx hint */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <span style={{ fontSize:12, color:C.muted }}>
+          {xlsxLoaded ? "\u2713 GO\u00c4-Tabelle geladen" : "Standard-Codes (bearbeitbar per xlsx)"}
+        </span>
+        <button onClick={function(){fileRef.current.click()}} style={{ background:"none", border:"none", fontSize:12, color:C.accent, cursor:"pointer", fontWeight:500 }}>
+          {xlsxLoaded ? "\u21bb Neu laden" : "\u21e7 goae_codes.xlsx laden"}
+        </button>
+      </div>
+      {err && <div style={S.errBox}>{err}</div>}
+
+      {/* Search */}
+      <div style={S.searchWrap}>
+        <span style={S.searchIcon}>{"\u2315"}</span>
+        <input style={S.searchInput} placeholder="Code, Stichwort oder Kategorie\u2026" value={q} onChange={function(e){setQ(e.target.value)}} />
+        {q && <button style={S.clearBtn} onClick={function(){setQ("")}}>{"\u2715"}</button>}
+      </div>
+
+      {/* Factor */}
+      <div style={S.facRow}>
+        {["1.0","1.8","2.3","3.5"].map(function(fv) {
+          return <button key={fv} onClick={function(){setFac(fv)}} style={Object.assign({}, S.facBtn, fac===fv ? S.facActive : {})}>{fv+"\u00d7"}</button>;
+        })}
+      </div>
+
+      {/* List */}
+      <div style={S.list}>
+        {results.map(function(g, idx) {
+          var amount = g.fee * f;
+          return (
+            <div key={g.code+"-"+idx} style={{ background:C.surf, borderRadius:12, padding:"12px 14px", borderLeft:"3px solid "+C.accent }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                <span style={{ fontFamily:"'Syne',sans-serif", fontWeight:700, fontSize:13, color:C.navy }}>{"\u00a7 "+g.code}</span>
+                <span style={{ fontSize:11, background:C.bg, color:C.muted, padding:"2px 8px", borderRadius:20, fontWeight:500 }}>{g.cat}</span>
+              </div>
+              <div style={{ fontSize:14, lineHeight:1.4, marginBottom:8 }}>{g.desc}</div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <span style={{ fontSize:12, color:C.muted }}>{fmtEuro(g.fee)+" \u00d7 "+fac}</span>
+                <span style={{ fontFamily:"'Syne',sans-serif", fontSize:16, fontWeight:700, color:C.navy }}>{fmtEuro(amount)}</span>
+              </div>
+            </div>
+          );
+        })}
+        {results.length === 0 && <div style={S.empty}>{"Keine Treffer f\u00fcr \u201e"+q+"\u201c"}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TAB 2: Rechnungen (reads zahlungen.xlsx)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function parseZahlungen(arrayBuffer) {
+  var wb = XLSX.read(arrayBuffer, { type:"array" });
+  var ws = wb.Sheets["Rechnungen"];
+  if (!ws) return [];
+  var rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:"" });
+  var data = [];
+  for (var i = 1; i < rows.length; i++) {
+    var r = rows[i];
+    if (!r[0]) continue;
+    data.push({
+      nr: String(r[0] || ""),
+      typ: String(r[1] || ""),
+      datum: String(r[2] || ""),
+      patient: String(r[3] || ""),
+      betrag: parseFloat(r[4]) || 0,
+      erstelltAm: String(r[5] || ""),
+      status: String(r[6] || ""),
+      zahlungsdatum: String(r[7] || ""),
+      notizen: String(r[8] || ""),
+    });
+  }
+  return data;
+}
+
+function statusColor(s) {
+  var sl = (s || "").toLowerCase();
+  if (sl === "bezahlt") return { bg:"#D1FAE5", fg:"#065F46" };
+  if (sl === "eingereicht") return { bg:"#DBEAFE", fg:"#1E40AF" };
+  if (sl === "nicht eingereicht" || sl === "offen") return { bg:"#FEF3C7", fg:"#92400E" };
+  return { bg:"#E2E8F0", fg:C.muted };
+}
+
+function RechnungenTab() {
+  var _s1 = useState([]), rechnungen = _s1[0], setRechnungen = _s1[1];
+  var _s2 = useState(false), loaded = _s2[0], setLoaded = _s2[1];
+  var _s3 = useState(""), q = _s3[0], setQ = _s3[1];
+  var _s4 = useState("alle"), filter = _s4[0], setFilter = _s4[1];
+  var _s5 = useState(null), expanded = _s5[0], setExpanded = _s5[1];
+  var _s6 = useState(null), error = _s6[0], setError = _s6[1];
+  var fileRef = useRef(null);
+
+  function handleFile(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    setError(null);
+    var reader = new FileReader();
+    reader.onload = function(evt) {
+      try {
+        var data = new Uint8Array(evt.target.result);
+        var rows = parseZahlungen(data);
+        setRechnungen(rows);
+        setLoaded(true);
+      } catch(err) {
+        setError("Datei konnte nicht gelesen werden: " + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  }
+
+  var filtered = rechnungen.filter(function(r) {
+    if (filter === "offen") { var sl = r.status.toLowerCase(); if (sl !== "nicht eingereicht" && sl !== "offen") return false; }
+    if (filter === "eingereicht" && r.status.toLowerCase() !== "eingereicht") return false;
+    if (filter === "bezahlt" && r.status.toLowerCase() !== "bezahlt") return false;
+    if (q.trim()) {
+      var ql = q.toLowerCase();
+      return r.patient.toLowerCase().includes(ql) || r.nr.toLowerCase().includes(ql) || r.datum.includes(ql);
+    }
+    return true;
+  });
+
+  var totalBetrag = rechnungen.reduce(function(s,r){return s+r.betrag},0);
+  var bezahltBetrag = rechnungen.filter(function(r){return r.status.toLowerCase()==="bezahlt"}).reduce(function(s,r){return s+r.betrag},0);
+  var offenBetrag = totalBetrag - bezahltBetrag;
+  var countBezahlt = rechnungen.filter(function(r){return r.status.toLowerCase()==="bezahlt"}).length;
+  var countEingereicht = rechnungen.filter(function(r){return r.status.toLowerCase()==="eingereicht"}).length;
+  var countOffen = rechnungen.filter(function(r){var sl=r.status.toLowerCase();return sl==="nicht eingereicht"||sl==="offen"}).length;
+
+  if (!loaded) {
+    return (
+      <div style={S.tab}>
+        <input type="file" accept=".xlsx,.xls" ref={fileRef} style={{ display:"none" }} onChange={handleFile} />
+        <div style={{ textAlign:"center", padding:"60px 20px" }}>
+          <div style={{ fontSize:48, marginBottom:16 }}>{"\ud83d\udcc4"}</div>
+          <div style={{ fontFamily:"'Syne',sans-serif", fontSize:18, fontWeight:700, color:C.navy, marginBottom:8 }}>{"Rechnungen laden"}</div>
+          <div style={{ fontSize:14, color:C.muted, lineHeight:1.6, marginBottom:24 }}>
+            {"W\u00e4hle die Datei "}
+            <strong>{"zahlungen.xlsx"}</strong>
+            {" aus dem Schmieder-Ordner."}
+          </div>
+          <button style={S.primaryBtn} onClick={function(){fileRef.current.click()}}>{"Datei ausw\u00e4hlen"}</button>
+          {error && <div style={S.errBox}>{error}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.tab}>
+      <input type="file" accept=".xlsx,.xls" ref={fileRef} style={{ display:"none" }} onChange={handleFile} />
+
+      {/* Summary */}
+      <div style={Object.assign({}, S.card, { marginBottom:12 })}>
+        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:10 }}>
+          <div>
+            <div style={{ fontSize:11, color:C.muted, textTransform:"uppercase", letterSpacing:"0.05em" }}>{"Gesamt"}</div>
+            <div style={{ fontFamily:"'Syne',sans-serif", fontSize:20, fontWeight:700, color:C.navy }}>{fmtEuro(totalBetrag)}</div>
+          </div>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:11, color:C.muted, textTransform:"uppercase", letterSpacing:"0.05em" }}>{"Ausstehend"}</div>
+            <div style={{ fontFamily:"'Syne',sans-serif", fontSize:20, fontWeight:700, color:offenBetrag>0?C.orange:C.green }}>{fmtEuro(offenBetrag)}</div>
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:12, fontSize:12, color:C.muted }}>
+          <span>{"\u2713 "+countBezahlt+" bezahlt"}</span>
+          <span>{"\u2709 "+countEingereicht+" eingereicht"}</span>
+          <span>{"\u25cb "+countOffen+" offen"}</span>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div style={S.searchWrap}>
+        <span style={S.searchIcon}>{"\u2315"}</span>
+        <input style={S.searchInput} placeholder="Patient, Rechnung-Nr\u2026" value={q} onChange={function(e){setQ(e.target.value)}} />
+        {q && <button style={S.clearBtn} onClick={function(){setQ("")}}>{"\u2715"}</button>}
+      </div>
+
+      {/* Filter + reload */}
+      <div style={{ display:"flex", gap:8, marginBottom:10, alignItems:"center" }}>
+        {[{id:"alle",label:"Alle"},{id:"offen",label:"Offen"},{id:"eingereicht",label:"Eingereicht"},{id:"bezahlt",label:"Bezahlt"}].map(function(f) {
+          return <button key={f.id} onClick={function(){setFilter(f.id)}} style={Object.assign({}, S.facBtn, filter===f.id ? S.facActive : {}, { fontSize:12, padding:"6px 0" })}>{f.label}</button>;
+        })}
+        <button onClick={function(){fileRef.current.click()}} style={{ background:"none", border:"none", fontSize:14, color:C.accent, cursor:"pointer", flexShrink:0 }}>{"\u21bb"}</button>
+      </div>
+
+      {/* List */}
+      <div style={S.list}>
+        {filtered.map(function(r, idx) {
+          var sc = statusColor(r.status);
+          var open = expanded === (r.nr+"-"+idx);
+          return (
+            <div key={r.nr+"-"+idx} style={Object.assign({}, S.card, { borderLeft:"3px solid "+(r.typ==="Privat"?"#8B5CF6":C.accent), padding:"12px 14px" })}>
+              <div style={S.cardHead} onClick={function(){setExpanded(open?null:(r.nr+"-"+idx))}}>
+                <div style={{ flex:1 }}>
+                  <div style={S.pName}>{r.patient}</div>
+                  <div style={S.pSub}>
+                    {r.nr+" \u00b7 "+r.datum+" \u00b7 "}
+                    <span style={{ fontWeight:600, color:C.navy }}>{fmtEuro(r.betrag)}</span>
+                  </div>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                  <span style={Object.assign({}, S.badge, { background:sc.bg, color:sc.fg, marginBottom:0, marginRight:0, fontSize:11 })}>{r.status||"?"}</span>
+                  <span style={{ fontSize:12, color:"#94A3B8" }}>{open?"\u25b2":"\u25bc"}</span>
+                </div>
+              </div>
+              {open && (
+                <div style={S.cardBody}>
+                  <div style={{ display:"flex", gap:16, flexWrap:"wrap", marginBottom:6 }}>
+                    <div><div style={{ fontSize:11, color:C.muted }}>{"Typ"}</div><div style={{ fontSize:13, fontWeight:500 }}>{r.typ}</div></div>
+                    <div><div style={{ fontSize:11, color:C.muted }}>{"Erstellt"}</div><div style={{ fontSize:13 }}>{r.erstelltAm||"\u2014"}</div></div>
+                    {r.zahlungsdatum && <div><div style={{ fontSize:11, color:C.muted }}>{"Bezahlt am"}</div><div style={{ fontSize:13 }}>{r.zahlungsdatum}</div></div>}
+                  </div>
+                  {r.notizen && <div style={S.noteText}>{r.notizen}</div>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {filtered.length === 0 && <div style={S.empty}>{"Keine Rechnungen gefunden."}</div>}
+      </div>
+
+      <div style={S.privacy}><div style={S.privacyTxt}>{"\ud83d\udd12 Alle Daten lokal \u2014 keine \u00dcbertragung an Dritte"}</div></div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TAB 3: Anfragen (reads email_requests.json)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function parseAnfragen(text) {
+  try {
+    var arr = JSON.parse(text);
+    if (!Array.isArray(arr)) return [];
+    return arr.map(function(r) {
+      return {
+        datum: String(r.datum || ""),
+        von: String(r.von_name || r.von || ""),
+        vonAddr: String(r.von || ""),
+        replyTo: String(r.reply_to || r.von || ""),
+        betreff: String(r.betreff || ""),
+        patient: String(r.patient_extract || ""),
+        body: String(r.body_preview || ""),
+        pdfs: r.pdf_attachments || [],
+        status: String(r.status || "Offen"),
+        rechnungNr: String(r.rechnung_nr || ""),
+        replySent: !!r.reply_sent,
+      };
+    });
+  } catch(e) {
+    return [];
+  }
+}
+
+function AnfragenTab() {
+  var _s1 = useState([]), anfragen = _s1[0], setAnfragen = _s1[1];
+  var _s2 = useState(false), loaded = _s2[0], setLoaded = _s2[1];
+  var _s3 = useState("alle"), filter = _s3[0], setFilter = _s3[1];
+  var _s4 = useState(null), expanded = _s4[0], setExpanded = _s4[1];
+  var _s5 = useState(""), q = _s5[0], setQ = _s5[1];
+  var _s6 = useState(null), error = _s6[0], setError = _s6[1];
+  var fileRef = useRef(null);
+
+  var REPLY_TEXT = "Sehr geehrte Damen und Herren,\n\nDas Konsil wurde bearbeitet.\n\nMit freundlichen Gr\u00fc\u00dfen,\nHNO Zentrum Heidelberg\nBAG Demers und Dr. Kolb";
+
+  function handleFile(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    setError(null);
+    var reader = new FileReader();
+    reader.onload = function(evt) {
+      try {
+        var parsed = parseAnfragen(evt.target.result);
+        setAnfragen(parsed);
+        setLoaded(true);
+      } catch(ex) {
+        setError("Datei konnte nicht gelesen werden: " + ex.message);
+      }
+    };
+    reader.readAsText(file, "utf-8");
+    e.target.value = "";
+  }
+
+  function anfStatusColor(s) {
+    if (s === "Erledigt") return { bg:"#D1FAE5", fg:"#065F46" };
+    return { bg:"#FEF3C7", fg:"#92400E" };
+  }
+
+  var filtered = anfragen.filter(function(a) {
+    if (filter === "offen" && a.status !== "Offen") return false;
+    if (filter === "erledigt" && a.status !== "Erledigt") return false;
+    if (q.trim()) {
+      var ql = q.toLowerCase();
+      return a.patient.toLowerCase().includes(ql) || a.betreff.toLowerCase().includes(ql) || a.von.toLowerCase().includes(ql);
+    }
+    return true;
+  });
+
+  var countOffen = anfragen.filter(function(a){return a.status==="Offen"}).length;
+  var countErledigt = anfragen.filter(function(a){return a.status==="Erledigt"}).length;
+
+  if (!loaded) {
+    return (
+      <div style={S.tab}>
+        <input type="file" accept=".json" ref={fileRef} style={{ display:"none" }} onChange={handleFile} />
+        <div style={{ textAlign:"center", padding:"60px 20px" }}>
+          <div style={{ fontSize:48, marginBottom:16 }}>{"\u2709"}</div>
+          <div style={{ fontFamily:"'Syne',sans-serif", fontSize:18, fontWeight:700, color:C.navy, marginBottom:8 }}>{"Konsilanfragen laden"}</div>
+          <div style={{ fontSize:14, color:C.muted, lineHeight:1.6, marginBottom:24 }}>
+            {"W\u00e4hle die Datei "}
+            <strong>{"email_requests.json"}</strong>
+            {" aus dem Schmieder-Ordner.\nAnfragen werden auf dem Desktop per IMAP abgerufen."}
+          </div>
+          <button style={S.primaryBtn} onClick={function(){fileRef.current.click()}}>{"Datei ausw\u00e4hlen"}</button>
+          {error && <div style={S.errBox}>{error}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.tab}>
+      <input type="file" accept=".json" ref={fileRef} style={{ display:"none" }} onChange={handleFile} />
+
+      {/* Summary */}
+      <div style={Object.assign({}, S.card, { marginBottom:12 })}>
+        <div style={{ display:"flex", gap:16, fontSize:13, color:C.muted }}>
+          <span>{"\u2709 "+anfragen.length+" Anfragen"}</span>
+          <span style={{ color:C.orange }}>{countOffen+" offen"}</span>
+          <span style={{ color:C.green }}>{countErledigt+" erledigt"}</span>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div style={S.searchWrap}>
+        <span style={S.searchIcon}>{"\u2315"}</span>
+        <input style={S.searchInput} placeholder="Patient, Betreff, Absender\u2026" value={q} onChange={function(e){setQ(e.target.value)}} />
+        {q && <button style={S.clearBtn} onClick={function(){setQ("")}}>{"\u2715"}</button>}
+      </div>
+
+      {/* Filter + reload */}
+      <div style={{ display:"flex", gap:8, marginBottom:10, alignItems:"center" }}>
+        {[{id:"alle",label:"Alle"},{id:"offen",label:"Offen"},{id:"erledigt",label:"Erledigt"}].map(function(f) {
+          return <button key={f.id} onClick={function(){setFilter(f.id)}} style={Object.assign({}, S.facBtn, filter===f.id ? S.facActive : {}, { fontSize:12, padding:"6px 0" })}>{f.label}</button>;
+        })}
+        <button onClick={function(){fileRef.current.click()}} style={{ background:"none", border:"none", fontSize:14, color:C.accent, cursor:"pointer", flexShrink:0 }}>{"\u21bb"}</button>
+      </div>
+
+      {/* List */}
+      <div style={S.list}>
+        {filtered.map(function(a, idx) {
+          var sc = anfStatusColor(a.status);
+          var open = expanded === idx;
+          return (
+            <div key={idx} style={Object.assign({}, S.card, { borderLeft:"3px solid "+(a.status==="Offen"?C.orange:C.green), padding:"12px 14px" })}>
+              <div style={S.cardHead} onClick={function(){setExpanded(open?null:idx)}}>
+                <div style={{ flex:1 }}>
+                  <div style={S.pName}>{a.patient || a.betreff}</div>
+                  <div style={S.pSub}>
+                    {fmtDate(a.datum)+" \u00b7 "+a.von}
+                    {a.rechnungNr ? " \u00b7 Rechnung "+a.rechnungNr : ""}
+                  </div>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                  {a.replySent && <span style={{ fontSize:11, color:C.green }}>{"\u2713"}</span>}
+                  <span style={Object.assign({}, S.badge, { background:sc.bg, color:sc.fg, marginBottom:0, marginRight:0, fontSize:11 })}>{a.status}</span>
+                  <span style={{ fontSize:12, color:"#94A3B8" }}>{open?"\u25b2":"\u25bc"}</span>
+                </div>
+              </div>
+              {open && (
+                <div style={S.cardBody}>
+                  <div style={{ fontSize:12, color:C.muted, marginBottom:4 }}>
+                    <strong>{"Betreff: "}</strong>{a.betreff}
+                  </div>
+                  <div style={{ fontSize:12, color:C.muted, marginBottom:8 }}>
+                    <strong>{"Von: "}</strong>{a.von}{a.vonAddr !== a.von ? " <"+a.vonAddr+">" : ""}
+                  </div>
+                  {a.pdfs.length > 0 && (
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginBottom:8 }}>
+                      {a.pdfs.map(function(p,i){
+                        return <span key={i} style={{ fontSize:11, background:C.bg, color:C.navy, padding:"2px 8px", borderRadius:8 }}>{"\ud83d\udcc4 "+p}</span>;
+                      })}
+                    </div>
+                  )}
+                  {a.body && (
+                    <div style={{ background:C.bg, borderRadius:8, padding:10, fontSize:13, color:C.txt, lineHeight:1.5, whiteSpace:"pre-wrap", maxHeight:200, overflowY:"auto" }}>
+                      {a.body}
+                    </div>
+                  )}
+                  {a.replySent && <div style={Object.assign({}, S.badge, { background:"#D1FAE5", color:"#065F46", marginTop:8 })}>{"\u2713 Best\u00e4tigung gesendet"}</div>}
+
+                  {/* Quick reply actions */}
+                  <div style={{ display:"flex", flexDirection:"column", gap:8, marginTop:10 }}>
+                    <button style={Object.assign({}, S.aBtn, S.aBtnPrimary)}
+                      onClick={function(){
+                        var subject = encodeURIComponent("Re: " + a.betreff);
+                        var body = encodeURIComponent(REPLY_TEXT);
+                        var to = encodeURIComponent(a.replyTo || a.vonAddr);
+                        window.location.href = "mailto:"+to+"?subject="+subject+"&body="+body;
+                      }}>
+                      {"\u2709  Antworten"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {filtered.length === 0 && <div style={S.empty}>{"Keine Anfragen gefunden."}</div>}
+      </div>
+
+      <div style={S.privacy}><div style={S.privacyTxt}>{"\ud83d\udd12 Alle Daten lokal \u2014 keine \u00dcbertragung an Dritte"}</div></div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Navigation + App
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function Nav(props) {
+  var tab = props.tab, set = props.set, anfragenCount = props.anfragenCount || 0;
+  var items = [
+    { id:"goae",       icon:"\u2695",         label:"GO\u00c4"       },
+    { id:"rechnungen", icon:"\ud83d\udccb",   label:"Rechnungen"     },
+    { id:"anfragen",   icon:"\u2709",         label:"Anfragen"       },
+  ];
+  return (
+    <nav style={S.nav}>
+      {items.map(function(it) {
+        return (
+          <button key={it.id} onClick={function(){set(it.id)}} style={S.navBtn}>
+            <span style={Object.assign({}, S.navIcon, { color: tab===it.id ? C.navy : "#94A3B8" })}>{it.icon}</span>
+            <span style={Object.assign({}, S.navLbl, { color: tab===it.id ? C.navy : "#94A3B8", fontWeight: tab===it.id ? 600 : 400 })}>{it.label}</span>
+            {tab===it.id && <div style={S.navDot} />}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function App() {
+  var _s = useState("goae"), tab = _s[0], setTab = _s[1];
+  var labels = { goae:"GO\u00c4 Nachschlagen", rechnungen:"Rechnungen", anfragen:"Konsilanfragen" };
+  return (
+    <div style={S.app}>
+      <header style={S.hdr}>
+        <div style={S.hdrIcon}>{"\u2695"}</div>
+        <div>
+          <div style={S.hdrTitle}>{"HNO Zentrum Heidelberg"}</div>
+          <div style={S.hdrSub}>{labels[tab]}</div>
+        </div>
+      </header>
+      {tab==="goae"       && <GoaeTab />}
+      {tab==="rechnungen" && <RechnungenTab />}
+      {tab==="anfragen"   && <AnfragenTab />}
+      <Nav tab={tab} set={setTab} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
