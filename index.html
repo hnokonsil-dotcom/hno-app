@@ -13,6 +13,7 @@
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   body { background: #EEF2F7; font-family: 'DM Sans', sans-serif; }
@@ -32,6 +33,146 @@ const { useState, useEffect, useRef } = React;
  */
 
 var PUNKTWERT = 0.0582873;
+
+/* ── Google OAuth / Gmail API ────────────────────────────────────────── */
+var GMAIL_CLIENT_ID = "982293958663-6u8gfba4t48tr971u8kdm3haccsaog7m.apps.googleusercontent.com";
+var GMAIL_SCOPES = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send";
+var _gmailToken = null;
+var _tokenClient = null;
+
+function initGmailTokenClient(onTokenCallback) {
+  if (typeof google === "undefined" || !google.accounts) return null;
+  _tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: GMAIL_CLIENT_ID,
+    scope: GMAIL_SCOPES,
+    callback: function(resp) {
+      if (resp.error) { onTokenCallback(null, resp.error); return; }
+      _gmailToken = resp.access_token;
+      onTokenCallback(resp.access_token, null);
+    },
+  });
+  return _tokenClient;
+}
+
+function gmailSignIn() {
+  if (_tokenClient) _tokenClient.requestAccessToken();
+}
+
+function gmailSignOut() {
+  if (_gmailToken) {
+    google.accounts.oauth2.revoke(_gmailToken);
+    _gmailToken = null;
+  }
+}
+
+function gmailFetch(endpoint) {
+  return fetch("https://gmail.googleapis.com/gmail/v1/users/me/" + endpoint, {
+    headers: { Authorization: "Bearer " + _gmailToken }
+  }).then(function(r) { return r.json(); });
+}
+
+function base64Decode(str) {
+  try {
+    var s = str.replace(/-/g, "+").replace(/_/g, "/");
+    return decodeURIComponent(atob(s).split("").map(function(c) {
+      return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
+    }).join(""));
+  } catch(e) { return atob(str.replace(/-/g, "+").replace(/_/g, "/")); }
+}
+
+function getHeader(headers, name) {
+  var h = headers.find(function(x) { return x.name.toLowerCase() === name.toLowerCase(); });
+  return h ? h.value : "";
+}
+
+function extractPlainBody(payload) {
+  if (payload.mimeType === "text/plain" && payload.body && payload.body.data) {
+    return base64Decode(payload.body.data);
+  }
+  if (payload.parts) {
+    for (var i = 0; i < payload.parts.length; i++) {
+      var result = extractPlainBody(payload.parts[i]);
+      if (result) return result;
+    }
+  }
+  if (payload.mimeType === "text/html" && payload.body && payload.body.data) {
+    var html = base64Decode(payload.body.data);
+    var tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    return tmp.textContent || tmp.innerText || "";
+  }
+  return "";
+}
+
+function extractAttachmentNames(payload) {
+  var names = [];
+  function walk(part) {
+    if (part.filename && part.filename.toLowerCase().endsWith(".pdf")) {
+      names.push(part.filename);
+    }
+    if (part.parts) part.parts.forEach(walk);
+  }
+  walk(payload);
+  return names;
+}
+
+function fetchKonsilEmails() {
+  var query = "subject:(Konsil OR konsil OR Anfrage OR anfrage OR Konsilanfrage OR HNO) -category:promotions -category:social";
+  return gmailFetch("messages?q=" + encodeURIComponent(query) + "&maxResults=50")
+    .then(function(listRes) {
+      if (!listRes.messages || listRes.messages.length === 0) return [];
+      var fetches = listRes.messages.map(function(m) {
+        return gmailFetch("messages/" + m.id + "?format=full");
+      });
+      return Promise.all(fetches);
+    })
+    .then(function(msgs) {
+      return msgs.map(function(msg) {
+        var headers = msg.payload.headers || [];
+        var from = getHeader(headers, "From");
+        var subject = getHeader(headers, "Subject");
+        var date = getHeader(headers, "Date");
+        var replyTo = getHeader(headers, "Reply-To") || from;
+        var body = extractPlainBody(msg.payload);
+        var pdfs = extractAttachmentNames(msg.payload);
+        var fromName = from.replace(/<[^>]+>/, "").trim();
+        var fromAddr = (from.match(/<([^>]+)>/) || [null, from])[1];
+        var patientMatch = body.match(/Patient[:\s]+([^\n,]+)/i) || subject.match(/Patient[:\s]+([^\n,]+)/i);
+        return {
+          id: msg.id,
+          datum: date,
+          von: fromName,
+          vonAddr: fromAddr,
+          replyTo: replyTo.replace(/<[^>]+>/, "").trim().match(/<([^>]+)>/) ? (replyTo.match(/<([^>]+)>/) || [null, replyTo])[1] : replyTo,
+          betreff: subject,
+          patient: patientMatch ? patientMatch[1].trim() : "",
+          body: body.substring(0, 500),
+          pdfs: pdfs,
+          status: "Offen",
+          rechnungNr: "",
+          replySent: false,
+          gmailId: msg.id,
+          threadId: msg.threadId,
+        };
+      });
+    });
+}
+
+function sendGmailReply(threadId, to, subject, bodyText) {
+  var raw = "To: " + to + "\r\n" +
+    "Subject: Re: " + subject + "\r\n" +
+    "Content-Type: text/plain; charset=utf-8\r\n\r\n" +
+    bodyText;
+  var encoded = btoa(unescape(encodeURIComponent(raw))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + _gmailToken,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ raw: encoded, threadId: threadId })
+  }).then(function(r) { return r.json(); });
+}
 
 /* ── Fallback GOAe codes (used until xlsx is loaded) ───────────────────── */
 var DEFAULT_GOAE = [
@@ -443,9 +584,85 @@ function AnfragenTab() {
   var _s4 = useState(null), expanded = _s4[0], setExpanded = _s4[1];
   var _s5 = useState(""), q = _s5[0], setQ = _s5[1];
   var _s6 = useState(null), error = _s6[0], setError = _s6[1];
+  var _s7 = useState(false), gmailConnected = _s7[0], setGmailConnected = _s7[1];
+  var _s8 = useState(false), gmailLoading = _s8[0], setGmailLoading = _s8[1];
+  var _s9 = useState(null), sendingReply = _s9[0], setSendingReply = _s9[1];
+  var _s10 = useState(null), replySuccess = _s10[0], setReplySuccess = _s10[1];
   var fileRef = useRef(null);
+  var tokenClientRef = useRef(null);
 
   var REPLY_TEXT = "Sehr geehrte Damen und Herren,\n\nDas Konsil wurde bearbeitet.\n\nMit freundlichen Gr\u00fc\u00dfen,\nHNO Zentrum Heidelberg\nBAG Demers und Dr. Kolb";
+
+  useEffect(function() {
+    var interval = setInterval(function() {
+      if (typeof google !== "undefined" && google.accounts && !tokenClientRef.current) {
+        tokenClientRef.current = initGmailTokenClient(function(token, err) {
+          if (err) { setError("Gmail Anmeldung fehlgeschlagen: " + err); return; }
+          setGmailConnected(true);
+          setGmailLoading(true);
+          fetchKonsilEmails().then(function(emails) {
+            setAnfragen(emails);
+            setLoaded(true);
+            setGmailLoading(false);
+          }).catch(function(e) {
+            setError("E-Mails konnten nicht geladen werden: " + e.message);
+            setGmailLoading(false);
+          });
+        });
+        clearInterval(interval);
+      }
+    }, 200);
+    return function() { clearInterval(interval); };
+  }, []);
+
+  function handleGmailSignIn() {
+    setError(null);
+    gmailSignIn();
+  }
+
+  function handleGmailRefresh() {
+    if (!_gmailToken) return;
+    setGmailLoading(true);
+    setError(null);
+    fetchKonsilEmails().then(function(emails) {
+      setAnfragen(emails);
+      setGmailLoading(false);
+    }).catch(function(e) {
+      setError("Aktualisierung fehlgeschlagen: " + e.message);
+      setGmailLoading(false);
+    });
+  }
+
+  function handleGmailReply(a) {
+    if (!_gmailToken || !a.threadId) {
+      var subject = encodeURIComponent("Re: " + a.betreff);
+      var body = encodeURIComponent(REPLY_TEXT);
+      var to = encodeURIComponent(a.replyTo || a.vonAddr);
+      window.location.href = "mailto:"+to+"?subject="+subject+"&body="+body;
+      return;
+    }
+    setSendingReply(a.gmailId || a.id);
+    sendGmailReply(a.threadId, a.replyTo || a.vonAddr, a.betreff, REPLY_TEXT)
+      .then(function(res) {
+        if (res.id) {
+          setReplySuccess(a.gmailId || a.id);
+          setAnfragen(function(prev) {
+            return prev.map(function(x) {
+              if ((x.gmailId || x.id) === (a.gmailId || a.id)) return Object.assign({}, x, { replySent:true, status:"Erledigt" });
+              return x;
+            });
+          });
+          setTimeout(function(){ setReplySuccess(null); }, 3000);
+        } else {
+          setError("Antwort konnte nicht gesendet werden.");
+        }
+        setSendingReply(null);
+      })
+      .catch(function(e) {
+        setError("Antwort fehlgeschlagen: " + e.message);
+        setSendingReply(null);
+      });
+  }
 
   function handleFile(e) {
     var file = e.target.files[0];
@@ -475,7 +692,7 @@ function AnfragenTab() {
     if (filter === "erledigt" && a.status !== "Erledigt") return false;
     if (q.trim()) {
       var ql = q.toLowerCase();
-      return a.patient.toLowerCase().includes(ql) || a.betreff.toLowerCase().includes(ql) || a.von.toLowerCase().includes(ql);
+      return (a.patient||"").toLowerCase().includes(ql) || (a.betreff||"").toLowerCase().includes(ql) || (a.von||"").toLowerCase().includes(ql);
     }
     return true;
   });
@@ -487,15 +704,38 @@ function AnfragenTab() {
     return (
       <div style={S.tab}>
         <input type="file" accept=".json" ref={fileRef} style={{ display:"none" }} onChange={handleFile} />
-        <div style={{ textAlign:"center", padding:"60px 20px" }}>
+        <div style={{ textAlign:"center", padding:"40px 20px" }}>
           <div style={{ fontSize:48, marginBottom:16 }}>{"\u2709"}</div>
-          <div style={{ fontFamily:"'Syne',sans-serif", fontSize:18, fontWeight:700, color:C.navy, marginBottom:8 }}>{"Konsilanfragen laden"}</div>
-          <div style={{ fontSize:14, color:C.muted, lineHeight:1.6, marginBottom:24 }}>
-            {"W\u00e4hle die Datei "}
-            <strong>{"email_requests.json"}</strong>
-            {" aus dem Schmieder-Ordner.\nAnfragen werden auf dem Desktop per IMAP abgerufen."}
+          <div style={{ fontFamily:"'Syne',sans-serif", fontSize:18, fontWeight:700, color:C.navy, marginBottom:8 }}>{"Konsilanfragen"}</div>
+
+          {/* Gmail sign-in button */}
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontSize:14, color:C.muted, lineHeight:1.6, marginBottom:16 }}>
+              {"Melde dich mit Gmail an, um Konsilanfragen direkt abzurufen und zu beantworten."}
+            </div>
+            <button
+              style={Object.assign({}, S.primaryBtn, { background:"#4285F4", display:"flex", alignItems:"center", justifyContent:"center", gap:10 })}
+              onClick={handleGmailSignIn}
+              disabled={gmailLoading}>
+              <span style={{ fontSize:18 }}>{"\ud83d\udce7"}</span>
+              {gmailLoading ? "Wird geladen\u2026" : "Mit Gmail anmelden"}
+            </button>
           </div>
-          <button style={S.primaryBtn} onClick={function(){fileRef.current.click()}}>{"Datei ausw\u00e4hlen"}</button>
+
+          {/* Divider */}
+          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20 }}>
+            <div style={{ flex:1, height:1, background:C.border }}></div>
+            <span style={{ fontSize:12, color:C.muted }}>{"oder"}</span>
+            <div style={{ flex:1, height:1, background:C.border }}></div>
+          </div>
+
+          {/* File fallback */}
+          <div style={{ fontSize:13, color:C.muted, lineHeight:1.6, marginBottom:12 }}>
+            {"Alternativ: "}
+            <strong>{"email_requests.json"}</strong>
+            {" aus dem Schmieder-Ordner laden."}
+          </div>
+          <button style={Object.assign({}, S.primaryBtn, { background:C.surf, color:C.navy, border:"1px solid "+C.border })} onClick={function(){fileRef.current.click()}}>{"Datei ausw\u00e4hlen"}</button>
           {error && <div style={S.errBox}>{error}</div>}
         </div>
       </div>
@@ -508,10 +748,13 @@ function AnfragenTab() {
 
       {/* Summary */}
       <div style={Object.assign({}, S.card, { marginBottom:12 })}>
-        <div style={{ display:"flex", gap:16, fontSize:13, color:C.muted }}>
-          <span>{"\u2709 "+anfragen.length+" Anfragen"}</span>
-          <span style={{ color:C.orange }}>{countOffen+" offen"}</span>
-          <span style={{ color:C.green }}>{countErledigt+" erledigt"}</span>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <div style={{ display:"flex", gap:16, fontSize:13, color:C.muted }}>
+            <span>{"\u2709 "+anfragen.length+" Anfragen"}</span>
+            <span style={{ color:C.orange }}>{countOffen+" offen"}</span>
+            <span style={{ color:C.green }}>{countErledigt+" erledigt"}</span>
+          </div>
+          {gmailConnected && <span style={{ fontSize:11, color:C.green, fontWeight:500 }}>{"\u2713 Gmail"}</span>}
         </div>
       </div>
 
@@ -527,16 +770,20 @@ function AnfragenTab() {
         {[{id:"alle",label:"Alle"},{id:"offen",label:"Offen"},{id:"erledigt",label:"Erledigt"}].map(function(f) {
           return <button key={f.id} onClick={function(){setFilter(f.id)}} style={Object.assign({}, S.facBtn, filter===f.id ? S.facActive : {}, { fontSize:12, padding:"6px 0" })}>{f.label}</button>;
         })}
-        <button onClick={function(){fileRef.current.click()}} style={{ background:"none", border:"none", fontSize:14, color:C.accent, cursor:"pointer", flexShrink:0 }}>{"\u21bb"}</button>
+        <button onClick={gmailConnected ? handleGmailRefresh : function(){fileRef.current.click()}} style={{ background:"none", border:"none", fontSize:14, color:C.accent, cursor:"pointer", flexShrink:0 }}>{gmailLoading ? "\u231b" : "\u21bb"}</button>
       </div>
+
+      {error && <div style={S.errBox}>{error}</div>}
 
       {/* List */}
       <div style={S.list}>
         {filtered.map(function(a, idx) {
           var sc = anfStatusColor(a.status);
           var open = expanded === idx;
+          var isSending = sendingReply === (a.gmailId || a.id);
+          var justSent = replySuccess === (a.gmailId || a.id);
           return (
-            <div key={idx} style={Object.assign({}, S.card, { borderLeft:"3px solid "+(a.status==="Offen"?C.orange:C.green), padding:"12px 14px" })}>
+            <div key={a.gmailId || idx} style={Object.assign({}, S.card, { borderLeft:"3px solid "+(a.status==="Offen"?C.orange:C.green), padding:"12px 14px" })}>
               <div style={S.cardHead} onClick={function(){setExpanded(open?null:idx)}}>
                 <div style={{ flex:1 }}>
                   <div style={S.pName}>{a.patient || a.betreff}</div>
@@ -559,7 +806,7 @@ function AnfragenTab() {
                   <div style={{ fontSize:12, color:C.muted, marginBottom:8 }}>
                     <strong>{"Von: "}</strong>{a.von}{a.vonAddr !== a.von ? " <"+a.vonAddr+">" : ""}
                   </div>
-                  {a.pdfs.length > 0 && (
+                  {a.pdfs && a.pdfs.length > 0 && (
                     <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginBottom:8 }}>
                       {a.pdfs.map(function(p,i){
                         return <span key={i} style={{ fontSize:11, background:C.bg, color:C.navy, padding:"2px 8px", borderRadius:8 }}>{"\ud83d\udcc4 "+p}</span>;
@@ -572,18 +819,27 @@ function AnfragenTab() {
                     </div>
                   )}
                   {a.replySent && <div style={Object.assign({}, S.badge, { background:"#D1FAE5", color:"#065F46", marginTop:8 })}>{"\u2713 Best\u00e4tigung gesendet"}</div>}
+                  {justSent && <div style={Object.assign({}, S.badge, { background:"#D1FAE5", color:"#065F46", marginTop:8 })}>{"\u2713 Antwort gesendet!"}</div>}
 
                   {/* Quick reply actions */}
                   <div style={{ display:"flex", flexDirection:"column", gap:8, marginTop:10 }}>
-                    <button style={Object.assign({}, S.aBtn, S.aBtnPrimary)}
-                      onClick={function(){
-                        var subject = encodeURIComponent("Re: " + a.betreff);
-                        var body = encodeURIComponent(REPLY_TEXT);
-                        var to = encodeURIComponent(a.replyTo || a.vonAddr);
-                        window.location.href = "mailto:"+to+"?subject="+subject+"&body="+body;
-                      }}>
-                      {"\u2709  Antworten"}
-                    </button>
+                    {gmailConnected && a.threadId ? (
+                      <button style={Object.assign({}, S.aBtn, S.aBtnSuccess, { opacity: isSending ? 0.6 : 1 })}
+                        onClick={function(){ handleGmailReply(a); }}
+                        disabled={isSending || a.replySent}>
+                        {isSending ? "\u231b Wird gesendet\u2026" : a.replySent ? "\u2713 Gesendet" : "\u2709 Direkt antworten (Gmail)"}
+                      </button>
+                    ) : (
+                      <button style={Object.assign({}, S.aBtn, S.aBtnPrimary)}
+                        onClick={function(){
+                          var subject = encodeURIComponent("Re: " + a.betreff);
+                          var body = encodeURIComponent(REPLY_TEXT);
+                          var to = encodeURIComponent(a.replyTo || a.vonAddr);
+                          window.location.href = "mailto:"+to+"?subject="+subject+"&body="+body;
+                        }}>
+                        {"\u2709  Antworten"}
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -593,7 +849,7 @@ function AnfragenTab() {
         {filtered.length === 0 && <div style={S.empty}>{"Keine Anfragen gefunden."}</div>}
       </div>
 
-      <div style={S.privacy}><div style={S.privacyTxt}>{"\ud83d\udd12 Alle Daten lokal \u2014 keine \u00dcbertragung an Dritte"}</div></div>
+      <div style={S.privacy}><div style={S.privacyTxt}>{gmailConnected ? "\ud83d\udd12 Gmail-Zugriff nur im Browser \u2014 kein Server" : "\ud83d\udd12 Alle Daten lokal \u2014 keine \u00dcbertragung an Dritte"}</div></div>
     </div>
   );
 }
