@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="HNO Heidelberg" />
 <title>HNO Zentrum Heidelberg</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.googlapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -127,14 +127,14 @@ function fetchKonsilEmails() {
       return Promise.all(fetches);
     })
     .then(function(msgs) {
-      return msgs.map(function(msg) {
-        var headers = msg.payload.headers || [];
-        var from = getHeader(headers, "From");
-        var subject = getHeader(headers, "Subject");
-        var date = getHeader(headers, "Date");
+      return msgs.filter(function(msg) { return msg && msg.payload; }).map(function(msg) {
+        var headers = (msg.payload && msg.payload.headers) || [];
+        var from = getHeader(headers, "From") || "";
+        var subject = getHeader(headers, "Subject") || "";
+        var date = getHeader(headers, "Date") || "";
         var replyTo = getHeader(headers, "Reply-To") || from;
-        var body = extractPlainBody(msg.payload);
-        var pdfs = extractAttachmentNames(msg.payload);
+        var body = msg.payload ? extractPlainBody(msg.payload) : "";
+        var pdfs = msg.payload ? extractAttachmentNames(msg.payload) : [];
         var fromName = from.replace(/<[^>]+>/, "").trim();
         var fromAddr = (from.match(/<([^>]+)>/) || [null, from])[1];
         var patientMatch = body.match(/Patient[:\s]+([^\n,]+)/i) || subject.match(/Patient[:\s]+([^\n,]+)/i);
