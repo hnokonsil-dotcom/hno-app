@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="HNO Heidelberg" />
-<title>HNO Zentrum Heidelberg</title>
-<link rel="preconnect" href="https://fonts.googlapis.com" />
+<meta name="apple-mobile-web-app-title" content="SD HNO Abrechnung" />
+<title>SD HNO Abrechnung</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -16,7 +16,7 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  body { background: #EEF2F7; font-family: 'DM Sans', sans-serif; }
+  body { background: #FDF8F8; font-family: 'DM Sans', sans-serif; }
   input, button, select { font-family: 'DM Sans', sans-serif; }
 </style>
 </head>
@@ -31,6 +31,46 @@ const { useState, useEffect, useRef } = React;
  * Es werden KEINE Daten an externe Server, Cloud-Dienste oder Dritte uebertragen.
  * Die Daten verbleiben vollstaendig auf dem Geraet des Nutzers.
  */
+
+/* ── IndexedDB cache for offline data ─────────────────────────────────── */
+var DB_NAME = "hno_app_cache";
+var DB_VERSION = 1;
+
+function openCacheDB() {
+  return new Promise(function(resolve, reject) {
+    var req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = function(e) {
+      var db = e.target.result;
+      if (!db.objectStoreNames.contains("data")) {
+        db.createObjectStore("data");
+      }
+    };
+    req.onsuccess = function(e) { resolve(e.target.result); };
+    req.onerror = function(e) { reject(e.target.error); };
+  });
+}
+
+function cacheSet(key, value) {
+  return openCacheDB().then(function(db) {
+    return new Promise(function(resolve, reject) {
+      var tx = db.transaction("data", "readwrite");
+      tx.objectStore("data").put(value, key);
+      tx.oncomplete = function() { resolve(); };
+      tx.onerror = function(e) { reject(e.target.error); };
+    });
+  });
+}
+
+function cacheGet(key) {
+  return openCacheDB().then(function(db) {
+    return new Promise(function(resolve, reject) {
+      var tx = db.transaction("data", "readonly");
+      var req = tx.objectStore("data").get(key);
+      req.onsuccess = function() { resolve(req.result); };
+      req.onerror = function(e) { reject(e.target.error); };
+    });
+  });
+}
 
 var PUNKTWERT = 0.0582873;
 
@@ -210,7 +250,7 @@ function fmtDate(d) {
   catch(e) { return String(d); }
 }
 
-var C = { bg:"#EEF2F7", surf:"#fff", navy:"#1A3A5C", accent:"#0EA5E9", green:"#10B981", red:"#EF4444", orange:"#F59E0B", txt:"#1E293B", muted:"#64748B", border:"#E2E8F0" };
+var C = { bg:"#FDF8F8", surf:"#fff", navy:"#2E5FA3", accent:"#CC0000", green:"#27ae60", red:"#B22222", orange:"#F59E0B", txt:"#1A1A1A", muted:"#777777", border:"#E2E8F0" };
 
 var S = {
   app:        { maxWidth:430, margin:"0 auto", minHeight:"100vh", background:C.bg, fontFamily:"'DM Sans',sans-serif", color:C.txt, display:"flex", flexDirection:"column" },
@@ -399,9 +439,9 @@ function parseZahlungen(arrayBuffer) {
 
 function statusColor(s) {
   var sl = (s || "").toLowerCase();
-  if (sl === "bezahlt") return { bg:"#D1FAE5", fg:"#065F46" };
-  if (sl === "eingereicht") return { bg:"#DBEAFE", fg:"#1E40AF" };
-  if (sl === "nicht eingereicht" || sl === "offen") return { bg:"#FEF3C7", fg:"#92400E" };
+  if (sl === "bezahlt") return { bg:"#C8E6C9", fg:"#065F46" };
+  if (sl === "eingereicht") return { bg:"#DDEEFF", fg:"#1E40AF" };
+  if (sl === "nicht eingereicht" || sl === "offen") return { bg:"#FFF9C4", fg:"#92400E" };
   return { bg:"#E2E8F0", fg:C.muted };
 }
 
@@ -412,7 +452,17 @@ function RechnungenTab() {
   var _s4 = useState("alle"), filter = _s4[0], setFilter = _s4[1];
   var _s5 = useState(null), expanded = _s5[0], setExpanded = _s5[1];
   var _s6 = useState(null), error = _s6[0], setError = _s6[1];
+  var _s7 = useState(null), previewItem = _s7[0], setPreviewItem = _s7[1];
   var fileRef = useRef(null);
+
+  useEffect(function() {
+    cacheGet("zahlungen").then(function(cached) {
+      if (cached && cached.length > 0) {
+        setRechnungen(cached);
+        setLoaded(true);
+      }
+    }).catch(function(){});
+  }, []);
 
   function handleFile(e) {
     var file = e.target.files[0];
@@ -425,6 +475,7 @@ function RechnungenTab() {
         var rows = parseZahlungen(data);
         setRechnungen(rows);
         setLoaded(true);
+        cacheSet("zahlungen", rows).catch(function(){});
       } catch(err) {
         setError("Datei konnte nicht gelesen werden: " + err.message);
       }
@@ -459,11 +510,10 @@ function RechnungenTab() {
           <div style={{ fontSize:48, marginBottom:16 }}>{"\ud83d\udcc4"}</div>
           <div style={{ fontFamily:"'Syne',sans-serif", fontSize:18, fontWeight:700, color:C.navy, marginBottom:8 }}>{"Rechnungen laden"}</div>
           <div style={{ fontSize:14, color:C.muted, lineHeight:1.6, marginBottom:24 }}>
-            {"W\u00e4hle die Datei "}
-            <strong>{"zahlungen.xlsx"}</strong>
-            {" aus dem Schmieder-Ordner."}
+            {"W\u00e4hle die Datei zahlungen.xlsx aus iCloud oder dem lokalen Speicher."}
           </div>
           <button style={S.primaryBtn} onClick={function(){fileRef.current.click()}}>{"Datei ausw\u00e4hlen"}</button>
+          <div style={{ fontSize:13, color:C.muted, marginTop:16 }}>{"Daten werden f\u00fcr den n\u00e4chsten Besuch gespeichert."}</div>
           {error && <div style={S.errBox}>{error}</div>}
         </div>
       </div>
@@ -514,10 +564,10 @@ function RechnungenTab() {
           var sc = statusColor(r.status);
           var open = expanded === (r.nr+"-"+idx);
           return (
-            <div key={r.nr+"-"+idx} style={Object.assign({}, S.card, { borderLeft:"3px solid "+(r.typ==="Privat"?"#8B5CF6":C.accent), padding:"12px 14px" })}>
+            <div key={r.nr+"-"+idx} style={Object.assign({}, S.card, { borderLeft:"3px solid "+(r.typ==="Privat"?"#2E5FA3":C.accent), padding:"12px 14px" })}>
               <div style={S.cardHead} onClick={function(){setExpanded(open?null:(r.nr+"-"+idx))}}>
                 <div style={{ flex:1 }}>
-                  <div style={S.pName}>{r.patient}</div>
+                  <div style={Object.assign({}, S.pName, {cursor:"pointer", color:C.navy})} onClick={function(e){e.stopPropagation(); setPreviewItem(r)}}>{r.patient}</div>
                   <div style={S.pSub}>
                     {r.nr+" \u00b7 "+r.datum+" \u00b7 "}
                     <span style={{ fontWeight:600, color:C.navy }}>{fmtEuro(r.betrag)}</span>
@@ -543,6 +593,49 @@ function RechnungenTab() {
         })}
         {filtered.length === 0 && <div style={S.empty}>{"Keine Rechnungen gefunden."}</div>}
       </div>
+
+      {previewItem && (
+        <div style={S.overlay} onClick={function(){setPreviewItem(null)}}>
+          <div style={Object.assign({}, S.sheet, {maxHeight:"90vh"})} onClick={function(e){e.stopPropagation()}}>
+            <div style={S.sheetHandle} />
+            <div style={{textAlign:"center", marginBottom:16}}>
+              <div style={{fontSize:11, color:C.muted, textTransform:"uppercase", letterSpacing:"0.1em"}}>{"Rechnungsvorschau"}</div>
+            </div>
+            <div style={{borderBottom:"2px solid "+C.navy, paddingBottom:12, marginBottom:16}}>
+              <div style={{fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:700, color:C.navy}}>{"Stefan Michael Demers"}</div>
+              <div style={{fontSize:12, color:C.muted}}>{"Facharzt f\u00fcr Hals-Nasen-Ohrenheilkunde"}</div>
+              <div style={{fontSize:11, color:C.muted, marginTop:4}}>{"Wormser Str. 32/1 \u00b7 69123 Heidelberg"}</div>
+            </div>
+            <div style={{fontSize:16, fontFamily:"'Syne',sans-serif", fontWeight:700, color:C.txt, marginBottom:16}}>{"Honorarrechnung"}</div>
+            <div style={{display:"flex", flexWrap:"wrap", gap:12, marginBottom:16}}>
+              <div style={{flex:"1 1 45%"}}><div style={{fontSize:10, color:C.muted, textTransform:"uppercase"}}>{"Rechnung-Nr."}</div><div style={{fontSize:14, fontWeight:600}}>{previewItem.nr}</div></div>
+              <div style={{flex:"1 1 45%"}}><div style={{fontSize:10, color:C.muted, textTransform:"uppercase"}}>{"Datum"}</div><div style={{fontSize:14}}>{previewItem.datum}</div></div>
+              <div style={{flex:"1 1 45%"}}><div style={{fontSize:10, color:C.muted, textTransform:"uppercase"}}>{"Patient"}</div><div style={{fontSize:14, fontWeight:600}}>{previewItem.patient}</div></div>
+              <div style={{flex:"1 1 45%"}}><div style={{fontSize:10, color:C.muted, textTransform:"uppercase"}}>{"Typ"}</div><div style={{fontSize:14}}>{previewItem.typ}</div></div>
+            </div>
+            <div style={{background:C.navy, color:"#fff", padding:"8px 12px", borderRadius:"6px 6px 0 0", fontSize:12, fontWeight:600, display:"flex", justifyContent:"space-between"}}>
+              <span>{"Beschreibung"}</span><span>{"Betrag"}</span>
+            </div>
+            <div style={{border:"1px solid "+C.border, borderTop:"none", borderRadius:"0 0 6px 6px", padding:"12px", marginBottom:16}}>
+              <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+                <div style={{fontSize:13}}>{previewItem.typ === "Konsil" ? "Konsiliarische Untersuchung" : "Privat\u00e4rztliche Behandlung"}</div>
+                <div style={{fontWeight:700, fontSize:15, color:C.navy}}>{fmtEuro(previewItem.betrag)}</div>
+              </div>
+            </div>
+            <div style={{display:"flex", justifyContent:"space-between", padding:"10px 12px", background:"#D6E4F0", borderRadius:6, marginBottom:16}}>
+              <span style={{fontWeight:700, fontSize:14}}>{"Gesamtbetrag"}</span>
+              <span style={{fontWeight:700, fontSize:16, color:C.navy}}>{fmtEuro(previewItem.betrag)}</span>
+            </div>
+            <div style={{display:"flex", gap:8, marginBottom:12}}>
+              <span style={Object.assign({}, S.badge, {background:statusColor(previewItem.status).bg, color:statusColor(previewItem.status).fg})}>{previewItem.status}</span>
+              {previewItem.erstelltAm && <span style={{fontSize:12, color:C.muted}}>{"Erstellt: "+previewItem.erstelltAm}</span>}
+              {previewItem.zahlungsdatum && <span style={{fontSize:12, color:C.muted}}>{"Bezahlt: "+previewItem.zahlungsdatum}</span>}
+            </div>
+            {previewItem.notizen && <div style={{fontSize:13, color:C.muted, background:"#F5F5F5", padding:10, borderRadius:8, marginBottom:12}}>{previewItem.notizen}</div>}
+            <button style={Object.assign({}, S.primaryBtn, {marginTop:8})} onClick={function(){setPreviewItem(null)}}>{"Schlie\u00dfen"}</button>
+          </div>
+        </div>
+      )}
 
       <div style={S.privacy}><div style={S.privacyTxt}>{"\ud83d\udd12 Alle Daten lokal \u2014 keine \u00dcbertragung an Dritte"}</div></div>
     </div>
@@ -888,8 +981,8 @@ function App() {
       <header style={S.hdr}>
         <div style={S.hdrIcon}>{"\u2695"}</div>
         <div>
-          <div style={S.hdrTitle}>{"HNO Zentrum Heidelberg"}</div>
-          <div style={S.hdrSub}>{labels[tab]}</div>
+          <div style={S.hdrTitle}>{"Stefan Demers"}</div>
+          <div style={S.hdrSub}>{"Facharzt für HNO-Heilkunde"}</div>
         </div>
       </header>
       {tab==="goae"       && <GoaeTab />}
