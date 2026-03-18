@@ -385,6 +385,22 @@ function GoaeTab() {
         })}
       </div>
 
+      {/* Patient file loader */}
+      <input type="file" accept=".xlsx,.xls" ref={patFileRef} style={{display:"none"}} onChange={handlePatientFile} />
+      {Object.keys(patientDetails).length === 0 && (
+        <div style={{textAlign:"center", marginBottom:10}}>
+          <button onClick={function(){patFileRef.current.click()}} style={{background:"none", border:"1px dashed "+C.border, borderRadius:8, padding:"6px 14px", fontSize:12, color:C.muted, cursor:"pointer"}}>
+            {"\u2795 patienten.xlsx laden f\u00fcr GO\u00c4-Details"}
+          </button>
+        </div>
+      )}
+      {Object.keys(patientDetails).length > 0 && (
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10}}>
+          <span style={{fontSize:11, color:C.green}}>{"\u2713 GO\u00c4-Details geladen ("+Object.keys(patientDetails).length+" Rechnungen)"}</span>
+          <button onClick={function(){patFileRef.current.click()}} style={{background:"none", border:"none", fontSize:11, color:C.accent, cursor:"pointer"}}>{"\u21bb weitere laden"}</button>
+        </div>
+      )}
+
       {/* List */}
       <div style={S.list}>
         {results.map(function(g, idx) {
@@ -407,6 +423,37 @@ function GoaeTab() {
       </div>
     </div>
   );
+}
+
+function parsePatientenXlsx(ab) {
+  var wb = XLSX.read(ab, {type:"array"});
+  var ws = wb.Sheets["Patienten"];
+  if (!ws) return {};
+  var goaeLookup = {};
+  var wg = wb.Sheets["GO\u00c4"] || wb.Sheets["GOAE"] || wb.Sheets["Goae"];
+  if (wg) {
+    var gr = XLSX.utils.sheet_to_json(wg, {header:1, defval:""});
+    for (var g=1; g<gr.length; g++) {
+      var gnr = String(gr[g][0]||"").trim().toUpperCase();
+      if (gnr) goaeLookup[gnr] = {bezeichn:String(gr[g][1]||""), gebuehr:parseFloat(gr[g][2])||0};
+    }
+  }
+  var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
+  var result = {};
+  for (var i=6; i<rows.length; i++) {
+    var r = rows[i];
+    if (!r[0]) continue;
+    var rNr = String(r[0]).trim();
+    var svcs = [];
+    for (var c=5; c<=16 && c<r.length; c++) {
+      var code = String(r[c]||"").trim().toUpperCase();
+      if (!code) continue;
+      var ent = goaeLookup[code] || {bezeichn:"", gebuehr:0};
+      svcs.push({code:code, bezeichn:ent.bezeichn, gebuehr:ent.gebuehr});
+    }
+    result[rNr] = {diagnose:String(r[4]||""), services:svcs};
+  }
+  return result;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -453,7 +500,25 @@ function RechnungenTab() {
   var _s5 = useState(null), expanded = _s5[0], setExpanded = _s5[1];
   var _s6 = useState(null), error = _s6[0], setError = _s6[1];
   var _s7 = useState(null), previewItem = _s7[0], setPreviewItem = _s7[1];
+  var _s8 = useState({}), patientDetails = _s8[0], setPatientDetails = _s8[1];
   var fileRef = useRef(null);
+  var patFileRef = useRef(null);
+
+  function handlePatientFile(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function(evt) {
+      try {
+        var data = new Uint8Array(evt.target.result);
+        var details = parsePatientenXlsx(data);
+        setPatientDetails(function(prev) { return Object.assign({}, prev, details); });
+        cacheSet("patientDetails", Object.assign({}, patientDetails, details)).catch(function(){});
+      } catch(err) {}
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  }
 
   useEffect(function() {
     cacheGet("zahlungen").then(function(cached) {
@@ -461,6 +526,9 @@ function RechnungenTab() {
         setRechnungen(cached);
         setLoaded(true);
       }
+    }).catch(function(){});
+    cacheGet("patientDetails").then(function(cached) {
+      if (cached) setPatientDetails(cached);
     }).catch(function(){});
   }, []);
 
@@ -609,13 +677,28 @@ function RechnungenTab() {
               <div style={{flex:"1 1 45%"}}><div style={{fontSize:10, color:C.muted, textTransform:"uppercase"}}>{"Typ"}</div><div style={{fontSize:14}}>{previewItem.typ}</div></div>
             </div>
             <div style={{background:C.navy, color:"#fff", padding:"8px 12px", borderRadius:"6px 6px 0 0", fontSize:12, fontWeight:600, display:"flex", justifyContent:"space-between"}}>
-              <span>{"Beschreibung"}</span><span>{"Betrag"}</span>
+              <span>{"GO\u00c4-Nr."}</span><span>{"Leistung"}</span><span>{"Betrag"}</span>
             </div>
-            <div style={{border:"1px solid "+C.border, borderTop:"none", borderRadius:"0 0 6px 6px", padding:"12px", marginBottom:16}}>
-              <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
-                <div style={{fontSize:13}}>{previewItem.typ === "Konsil" ? "Konsiliarische Untersuchung" : "Privat\u00e4rztliche Behandlung"}</div>
-                <div style={{fontWeight:700, fontSize:15, color:C.navy}}>{fmtEuro(previewItem.betrag)}</div>
-              </div>
+            <div style={{border:"1px solid "+C.border, borderTop:"none", borderRadius:"0 0 6px 6px", padding:"8px 12px", marginBottom:16}}>
+              {patientDetails[previewItem.nr] && patientDetails[previewItem.nr].services.length > 0 ? (
+                patientDetails[previewItem.nr].services.map(function(svc, si) {
+                  return (
+                    <div key={si} style={{display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom: si < patientDetails[previewItem.nr].services.length-1 ? "1px solid "+C.border : "none"}}>
+                      <span style={{fontSize:13, fontWeight:600, color:C.navy, minWidth:50}}>{svc.code}</span>
+                      <span style={{fontSize:12, flex:1, padding:"0 8px", color:C.muted}}>{svc.bezeichn || "\u2014"}</span>
+                      <span style={{fontSize:13, fontWeight:500, whiteSpace:"nowrap"}}>{fmtEuro(svc.gebuehr)}</span>
+                    </div>
+                  );
+                })
+              ) : (
+                <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0"}}>
+                  <div style={{fontSize:13}}>{previewItem.typ === "Konsil" ? "Konsiliarische Untersuchung" : "Privat\u00e4rztliche Behandlung"}</div>
+                  <div style={{fontWeight:700, fontSize:15, color:C.navy}}>{fmtEuro(previewItem.betrag)}</div>
+                </div>
+              )}
+              {patientDetails[previewItem.nr] && patientDetails[previewItem.nr].diagnose && (
+                <div style={{marginTop:8, fontSize:12, color:C.muted, fontStyle:"italic"}}>{"Diagnose: "+patientDetails[previewItem.nr].diagnose}</div>
+              )}
             </div>
             <div style={{display:"flex", justifyContent:"space-between", padding:"10px 12px", background:C.pale, borderRadius:6, marginBottom:16}}>
               <span style={{fontWeight:700, fontSize:14}}>{"Gesamtbetrag"}</span>
