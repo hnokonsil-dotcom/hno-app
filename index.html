@@ -250,7 +250,7 @@ function fmtDate(d) {
   catch(e) { return String(d); }
 }
 
-var C = { bg:"#FDF8F8", surf:"#fff", navy:"#CC0000", accent:"#CC0000", green:"#27ae60", red:"#B22222", orange:"#F59E0B", txt:"#1A1A1A", muted:"#777777", border:"#E2E8F0" };
+var C = { bg:"#FDF8F8", surf:"#fff", navy:"#CC0000", accent:"#8B0000", green:"#27ae60", red:"#B22222", orange:"#F59E0B", txt:"#1A1A1A", muted:"#777777", border:"#E2E8F0", pale:"#FFD8D8" };
 
 var S = {
   app:        { maxWidth:430, margin:"0 auto", minHeight:"100vh", background:C.bg, fontFamily:"'DM Sans',sans-serif", color:C.txt, display:"flex", flexDirection:"column" },
@@ -564,7 +564,7 @@ function RechnungenTab() {
           var sc = statusColor(r.status);
           var open = expanded === (r.nr+"-"+idx);
           return (
-            <div key={r.nr+"-"+idx} style={Object.assign({}, S.card, { borderLeft:"3px solid "+(r.typ==="Privat"?"#2E5FA3":C.accent), padding:"12px 14px" })}>
+            <div key={r.nr+"-"+idx} style={Object.assign({}, S.card, { borderLeft:"3px solid "+(r.typ==="Privat"?"#CC0000":C.accent), padding:"12px 14px" })}>
               <div style={S.cardHead} onClick={function(){setExpanded(open?null:(r.nr+"-"+idx))}}>
                 <div style={{ flex:1 }}>
                   <div style={Object.assign({}, S.pName, {cursor:"pointer", color:C.navy})} onClick={function(e){e.stopPropagation(); setPreviewItem(r)}}>{r.patient}</div>
@@ -601,12 +601,7 @@ function RechnungenTab() {
             <div style={{textAlign:"center", marginBottom:16}}>
               <div style={{fontSize:11, color:C.muted, textTransform:"uppercase", letterSpacing:"0.1em"}}>{"Rechnungsvorschau"}</div>
             </div>
-            <div style={{borderBottom:"2px solid "+C.navy, paddingBottom:12, marginBottom:16}}>
-              <div style={{fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:700, color:C.navy}}>{"Stefan Michael Demers"}</div>
-              <div style={{fontSize:12, color:C.muted}}>{"Facharzt f\u00fcr Hals-Nasen-Ohrenheilkunde"}</div>
-              <div style={{fontSize:11, color:C.muted, marginTop:4}}>{"Wormser Str. 32/1 \u00b7 69123 Heidelberg"}</div>
-            </div>
-            <div style={{fontSize:16, fontFamily:"'Syne',sans-serif", fontWeight:700, color:C.txt, marginBottom:16}}>{"Honorarrechnung"}</div>
+            <div style={{fontSize:16, fontFamily:"'Syne',sans-serif", fontWeight:700, color:C.txt, marginBottom:16, borderBottom:"2px solid "+C.navy, paddingBottom:12}}>{"Honorarrechnung"}</div>
             <div style={{display:"flex", flexWrap:"wrap", gap:12, marginBottom:16}}>
               <div style={{flex:"1 1 45%"}}><div style={{fontSize:10, color:C.muted, textTransform:"uppercase"}}>{"Rechnung-Nr."}</div><div style={{fontSize:14, fontWeight:600}}>{previewItem.nr}</div></div>
               <div style={{flex:"1 1 45%"}}><div style={{fontSize:10, color:C.muted, textTransform:"uppercase"}}>{"Datum"}</div><div style={{fontSize:14}}>{previewItem.datum}</div></div>
@@ -622,7 +617,7 @@ function RechnungenTab() {
                 <div style={{fontWeight:700, fontSize:15, color:C.navy}}>{fmtEuro(previewItem.betrag)}</div>
               </div>
             </div>
-            <div style={{display:"flex", justifyContent:"space-between", padding:"10px 12px", background:"#D6E4F0", borderRadius:6, marginBottom:16}}>
+            <div style={{display:"flex", justifyContent:"space-between", padding:"10px 12px", background:C.pale, borderRadius:6, marginBottom:16}}>
               <span style={{fontWeight:700, fontSize:14}}>{"Gesamtbetrag"}</span>
               <span style={{fontWeight:700, fontSize:16, color:C.navy}}>{fmtEuro(previewItem.betrag)}</span>
             </div>
