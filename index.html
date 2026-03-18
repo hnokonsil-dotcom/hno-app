@@ -385,22 +385,6 @@ function GoaeTab() {
         })}
       </div>
 
-      {/* Patient file loader */}
-      <input type="file" accept=".xlsx,.xls" ref={patFileRef} style={{display:"none"}} onChange={handlePatientFile} />
-      {Object.keys(patientDetails).length === 0 && (
-        <div style={{textAlign:"center", marginBottom:10}}>
-          <button onClick={function(){patFileRef.current.click()}} style={{background:"none", border:"1px dashed "+C.border, borderRadius:8, padding:"6px 14px", fontSize:12, color:C.muted, cursor:"pointer"}}>
-            {"\u2795 patienten.xlsx laden f\u00fcr GO\u00c4-Details"}
-          </button>
-        </div>
-      )}
-      {Object.keys(patientDetails).length > 0 && (
-        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10}}>
-          <span style={{fontSize:11, color:C.green}}>{"\u2713 GO\u00c4-Details geladen ("+Object.keys(patientDetails).length+" Rechnungen)"}</span>
-          <button onClick={function(){patFileRef.current.click()}} style={{background:"none", border:"none", fontSize:11, color:C.accent, cursor:"pointer"}}>{"\u21bb weitere laden"}</button>
-        </div>
-      )}
-
       {/* List */}
       <div style={S.list}>
         {results.map(function(g, idx) {
@@ -625,6 +609,22 @@ function RechnungenTab() {
         })}
         <button onClick={function(){fileRef.current.click()}} style={{ background:"none", border:"none", fontSize:14, color:C.accent, cursor:"pointer", flexShrink:0 }}>{"\u21bb"}</button>
       </div>
+
+      {/* Patient file loader */}
+      <input type="file" accept=".xlsx,.xls" ref={patFileRef} style={{display:"none"}} onChange={handlePatientFile} />
+      {Object.keys(patientDetails).length === 0 && (
+        <div style={{textAlign:"center", marginBottom:10}}>
+          <button onClick={function(){patFileRef.current.click()}} style={{background:"none", border:"1px dashed "+C.border, borderRadius:8, padding:"6px 14px", fontSize:12, color:C.muted, cursor:"pointer"}}>
+            {"\u2795 patienten.xlsx laden f\u00fcr GO\u00c4-Details"}
+          </button>
+        </div>
+      )}
+      {Object.keys(patientDetails).length > 0 && (
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10}}>
+          <span style={{fontSize:11, color:C.green}}>{"\u2713 GO\u00c4-Details geladen ("+Object.keys(patientDetails).length+" Rechnungen)"}</span>
+          <button onClick={function(){patFileRef.current.click()}} style={{background:"none", border:"none", fontSize:11, color:C.accent, cursor:"pointer"}}>{"\u21bb weitere laden"}</button>
+        </div>
+      )}
 
       {/* List */}
       <div style={S.list}>
